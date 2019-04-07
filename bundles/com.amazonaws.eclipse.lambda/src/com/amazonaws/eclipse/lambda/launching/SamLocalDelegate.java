@@ -129,11 +129,11 @@ public class SamLocalDelegate implements ILaunchConfigurationDelegate {
 
             metricsDataModel.addAttribute("SamLocalCommand", command.getName());
             if (command == SamAction.INVOKE) {
-                waitAndLaunchDebugger(project, launchMode, debugPort, samLocalCliProcess, subMonitor, samLocalOutputStream, 50);
+                waitAndLaunchDebugger(project, launchMode, debugPort, samLocalProcess, subMonitor, samLocalOutputStream, 50);
             } else if (command == SamAction.START_API) {
                 int invokeTimes = 0;
                 while (!subMonitor.isCanceled() && !samLocalProcess.isTerminated()) {
-                    waitAndLaunchDebugger(project, launchMode, debugPort, samLocalCliProcess, subMonitor, samLocalOutputStream, 1);
+                    waitAndLaunchDebugger(project, launchMode, debugPort, samLocalProcess, subMonitor, samLocalOutputStream, 1);
                     ++invokeTimes;
                 }
                 metricsDataModel.addMetric("InvokeTimes", (double)invokeTimes);
@@ -163,20 +163,20 @@ public class SamLocalDelegate implements ILaunchConfigurationDelegate {
      * @param project The target project the Debugger is running in
      * @param mode debug or run mode
      * @param debugPort The debug port
-     * @param samLocalCliProcess SAM Local process
+     * @param samLocalProcess SAM Local process
      * @param subMonitor {@link SubMonitor} for reporting the progress
      * @param outputStream The console output stream for showing the current status
      * @param totalWork Total work the Debugger takes
      * @throws CoreException
      */
     private void waitAndLaunchDebugger(IProject project, LaunchMode mode, int debugPort,
-            Process samLocalCliProcess, SubMonitor subMonitor, IOConsoleOutputStream outputStream, int totalWork) {
+            IProcess samLocalProcess, SubMonitor subMonitor, IOConsoleOutputStream outputStream, int totalWork) throws CoreException {
         if (mode == LaunchMode.DEBUG) {
             String statusUpdateMessage = "Waiting for SAM Local to attach the port " + debugPort;
             subMonitor.setTaskName(statusUpdateMessage);
             safeWriteToConsole(outputStream, statusUpdateMessage);
 
-            if (waitForPortBeingTakenByProcess(samLocalCliProcess, debugPort, subMonitor)) {
+            if (waitForPortBeingTakenByProcess(samLocalProcess, debugPort, subMonitor)) {
                 statusUpdateMessage = "Running Eclipse Debugger...";
                 subMonitor.setTaskName(statusUpdateMessage);
                 safeWriteToConsole(outputStream, statusUpdateMessage);
@@ -184,12 +184,17 @@ public class SamLocalDelegate implements ILaunchConfigurationDelegate {
                     try {
                         new RemoteDebugLauncher(project, debugPort, subMonitor.newChild(totalWork)).launch();
                         break;
-                    } catch (CoreException e) {}
+                    } catch (CoreException e) {
+                        if (!(e.getCause() instanceof IOException)) {
+                            samLocalProcess.terminate();
+                            throw e;
+                        }
+                    }
 
                     try {
                         Thread.sleep(500L);
                     } catch (InterruptedException e) {}
-                } while (samLocalCliProcess.isAlive() && !subMonitor.isCanceled());
+                } while (!samLocalProcess.isTerminated() && !subMonitor.isCanceled());
                 subMonitor.worked(totalWork);
             }
         }
@@ -289,9 +294,9 @@ public class SamLocalDelegate implements ILaunchConfigurationDelegate {
 
     // Wait for the port being take by the specified Process.
     // Return true if the port is taken in the given condition, otherwise false.
-    private boolean waitForPortBeingTakenByProcess(Process process, int portNo, IProgressMonitor monitor) {
+    private boolean waitForPortBeingTakenByProcess(IProcess process, int portNo, IProgressMonitor monitor) {
         long pingIntervalMilli = 100;
-        while (process.isAlive() && !monitor.isCanceled()) {
+        while (!process.isTerminated() && !monitor.isCanceled()) {
             try (Socket socket = new Socket("localhost", portNo)) {
                 return true;
             } catch (UnknownHostException e1) {
